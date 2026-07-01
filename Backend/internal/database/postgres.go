@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 
 	"tienda/backend/internal/config"
 )
@@ -49,7 +50,12 @@ func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.Name,
 	)
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{
+			SingularTable: false,
+			NoLowerCase:   false,
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("database: open postgres at %s:%d: %w", cfg.Host, cfg.Port, err)
 	}

@@ -39,6 +39,12 @@ func main() {
 		cfg.Database.Password != "", len(cfg.Database.Password))
 	fmt.Println("           connection: ✓ open, pool configured, ping ok")
 
+	if err := database.Migrate(db); err != nil {
+		log.Fatalf("database: migrate: %v", err)
+	}
+	fmt.Println("           migrate: ✓ 17 models reconciled")
+	fmt.Println()
+
 	fmt.Printf("JWT:       secret_len=%d bytes (min 32)\n", len(cfg.JWT.Secret))
 	fmt.Printf("           expiration=%dh, bcrypt_cost=%d\n",
 		cfg.JWT.ExpirationHours, cfg.JWT.BcryptCost)

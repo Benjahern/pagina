@@ -1,5 +1,46 @@
 # Backend — Tienda Online
 
+## Visión del proyecto (fuente: `../Idea.md`)
+
+> Resumen conceptual de la idea original. Las decisiones técnicas (stack, estructura, modelos) viven en las secciones siguientes — este apartado **no** las redefine, solo fija el alcance funcional que la idea original plantea.
+
+### Roles y catálogo
+
+- **Dos administradores** (el dueño + su papá). Ambos pueden agregar productos al catálogo y gestionar la tienda. Cada uno aporta sus propios productos pero comparten el mismo storefront público.
+- **Clientes** se registran por su cuenta para comprar. Los admins pueden gestionarlos (ver pedidos, datos, historial).
+- El catálogo es **mixto**: productos físicos + items 3D del dueño. La nota sobre `Items3D` como herramienta personal del dueño (no categoría pública) está en la siguiente sección.
+
+### Calculadora de costes 3D
+
+Para los items 3D propios del dueño, el precio se calcula como:
+
+```
+coste = (filamento_gastado × precio_kg_filamento) + (horas_impresión × costo_eléctrico_por_hora_impresora)
+```
+
+Los insumos de esta fórmula viven en las tablas `Filament` (precio/kg por marca/color) y `impresora3d` (watts → costo hora). Pendiente de feature, ver sección de Pendientes.
+
+### Funcionalidades administrativas especiales
+
+Estas son **exigencias explícitas de Idea.md** que el sistema debe soportar — no son opcionales:
+
+1. **Vista "admin → usuario normal"**: cuando el dueño inicia sesión con cuenta admin, debe existir un toggle para cambiar a la vista de cliente y navegar la tienda como un usuario cualquiera. Sirve para QA, demos y soporte.
+2. **Pedidos manuales**: clientes también contactan por WhatsApp o Facebook. El admin debe poder **crear el pedido manualmente** en el sistema, asignarlo al cliente correspondiente y tener visión centralizada de qué quiere cada usuario, aunque la venta no haya pasado por el checkout web. Esto convierte el panel admin en un mini-CRM de pedidos.
+3. **Privacidad**: el registro de usuarios debe requerir la aceptación de un documento de acuerdo de privacidad y confidencialidad. El backend debe persistir el consentimiento (timestamp + versión del documento + flag) para auditoría.
+
+### Pagos (pendiente de decidir)
+
+La pasarela de pagos **aún no está elegida**. Candidatos:
+
+- **Webpay** (Transbank, estándar chileno, alta adopción).
+- **Flow** (alternativa chilena, multi-proveedor).
+
+La decisión requiere investigar: comisiones, facilidad de integración con Go, soporte de devoluciones, webhooks, y manejo de pagos manuales para el caso de pedidos creados por admin. Ver Pendientes.
+
+### Auth (recordatorio)
+
+JWT emitido por el backend, **dos tipos de cuenta claramente diferenciados**: `User` (cliente) y `Admin` (administrador). Esto ya está implementado abajo en Stack/Convenciones; se reitera aquí porque Idea.md lo marca como preocupación de seguridad explícita.
+
 ## Qué estamos construyendo
 
 Tienda online **general** (productos físicos al público). Polivalente — no es una tienda de impresión 3D. El dueño tiene impresoras y filamento 3D como **herramientas personales/herramientas de producción**, por eso el esquema tiene tablas auxiliares (`Items3D`, `impresora3d`, `Filament`) que registran su operación privada. Esas tablas no son catálogo público: si un producto sale de la impresora del dueño, aparece en la tienda como un `Item` normal, no como algo especial.
@@ -68,11 +109,15 @@ Backend/
 
 - **Naming Go**: packages `snake_case`, structs `PascalCase`, exported `PascalCase`, interno `camelCase`.
 - **Naming DB**: columnas `snake_case`. Tablas mantienen la mezcla original del esquema (`Orders`, `Users`, `Cart_Item`, `shipping_address`). No renombrar sin migración planeada.
+- **Naming models vs tablas**: struct en singular Go (`User`, `Item`), `TableName()` retorna la forma plural/original del DBML (`Users`, `Items`). Snake_case columnas vía `NamingStrategy` de GORM — sin taggear cada campo.
+- **Organización de archivos en `internal/models/`**: **un archivo por modelo**. Extras (enums, constantes, helpers) del modelo en archivo separado del mismo paquete con prefijo: `item.go` + `item_status.go`, `payment.go` + `payment_method.go` + `payment_status.go`, etc.
+- **Organización de archivos en `internal/dto/`**: por dominio funcional, no por modelo. Ej: `auth_user.go` agrupa todos los DTOs del flujo auth de usuarios; `auth_admin.go` los de admin. Evitar un DTO por archivo.
 - **Idiomas**: código, comentarios, logs en **inglés**. Mensajes al usuario final en **español** (cuando se agregue UI).
 - **Errores**: services mapean `repository.ErrNotFound → service.ErrNotFound` y agregan específicos (`ErrEmailTaken`, `ErrInvalidCredentials`). El middleware de error en handler convierte a código HTTP.
 - **DTOs siempre**: nunca serializar un `model` directo a JSON — filtra `password_hash` y columnas internas. Mapear a DTO.
 - **Slug generation**: pendiente (hook `BeforeCreate` para auto-generar desde `name` si está vacío).
 - **Timestamps**: `timestamptz` siempre (nunca `date`).
+- **Seguridad**: GORM parametriza queries por default. Nunca `fmt.Sprintf` con user input para construir SQL. Ver comentario en `postgres.go`.
 
 ## Comandos comunes
 
@@ -131,32 +176,122 @@ Health: `GET /health`.
 - [x] `config/` + `.env.example` + carga de env
 - [x] `database/postgres.go` — conexión GORM + pool + ping (sin AutoMigrate aún)
 - [x] **DBML: añadir índices faltantes para query patterns reales** (Orders.shipping_address_id, Payment.order_id, Order_item.item_id, Review UNIQUE, Items.created_at, Stock_movement.order_id, Orders(status, created_at))
-- [ ] Models GORM que reflejen el esquema — **deben incluir los tags `gorm:"index:idx_xxx"` para que AutoMigrate replique los índices del DBML**
+- [x] **Models GORM** que reflejen el esquema (ver lista completa abajo) — **cada índice nuevo en el DBML debe tener su tag `gorm:"index:idx_xxx"` en el struct, o AutoMigrate no los creará**
+- [ ] DTOs de auth (`auth_user.go`, `auth_admin.go`) — primer set de DTOs
+- [x] `db.AutoMigrate(...)` en `Connect()` o en un `Migrate()` separado
 - [ ] Slice vertical **Auth** completo (register/login/me + JWT middleware)
 - [ ] Lectura pública de productos y categorías (con paginación + filtro + búsqueda)
 - [ ] Scaffolds (stubs 501) para admin CRUD, cart, orders
-- [ ] Hook para auto-generar slug desde `name`
+- [ ] Hook para auto-generar slug desde `name` (en `Item.BeforeCreate`)
 - [ ] Tests básicos (patrón con `services/auth_service_test.go`)
 - [ ] `Makefile` con targets run/build/test/tidy
 - [ ] `Dockerfile` multi-stage + docker-compose con postgres
 - [ ] Seeder opcional (admin user + categorías de ejemplo)
 - [ ] Decidir si fusionar `Admins` con `Users + role`
 
+### Pendientes funcionales (de `Idea.md`)
+
+Estos vienen de la visión del proyecto, no del desglose técnico. **No son opcionales**.
+
+- [ ] **Calculadora de costes 3D** — endpoint que reciba `item3d_id` (o parámetros) y devuelva precio calculado: filamento + horas × costo eléctrico. Depende de `Filament` y `impresora3d` pobladas con costos reales.
+- [ ] **Vista "admin → usuario normal"** — mecanismo para que un admin navegue la tienda como cliente sin cerrar sesión. Probablemente un header `X-View-Mode: user` o un token secundario; el frontend es quien más lo usa, pero el backend debe respetarlo (no revelar campos admin en respuestas cuando está en modo user).
+- [ ] **Pedidos manuales desde panel admin** — endpoints para que un admin cree un pedido en nombre de un cliente (caso WhatsApp/Facebook). Acepta cliente nuevo o existente, agrega items, fija total, opcionalmente marca como `pagado` con método `efectivo`/`transferencia`.
+- [ ] **Gestión de usuarios por admin** — CRUD/lectura de clientes: listar, buscar, ver historial de pedidos, ver direcciones. No necesariamente edición libre (probablemente restricción a soft-ban + notas internas).
+- [ ] **Aceptación de acuerdo de privacidad** — al registrarse el cliente debe aceptar el documento. Persistir: `user_id`, `document_version`, `accepted_at`, `ip`. Campo nuevo en `Users` o tabla aparte (`PrivacyConsent`).
+- [ ] **Integración con pasarela de pagos** — investigar Webpay vs Flow vs otros. Decisión basada en comisiones, integración con Go (SDK oficial vs REST), webhooks, devoluciones. Implementar contra el ganador.
+- [ ] **Documento de privacidad como archivo versionado** — almacenar las versiones del documento (markdown/pdf) en repo o storage; el backend expone la versión vigente que el frontend debe mostrar al cliente.
+
+## Models planificados (no implementados aún)
+
+Plan acordado el 2026-06-30: 17 structs + 6 archivos extra de enums/helpers = **23 archivos** en `internal/models/`.
+
+### Capa pública (catálogo/operación)
+
+| Archivo | Struct Go | Tabla | Notas |
+|---|---|---|---|
+| `user.go` | `User` | `Users` | Customer del storefront |
+| `category.go` | `Category` | `Category` | Categorías con jerarquía |
+| `item.go` | `Item` | `Items` | Productos (con hook BeforeCreate para slug) |
+| `item_status.go` | enum `ItemStatus` | — | `activo\|inactivo\|archivado` |
+| `cart.go` | `Cart` | `Cart` | 1 activo por usuario |
+| `cart_status.go` | enum `CartStatus` | — | `activo\|abandonado\|completado` |
+| `cart_item.go` | `CartItem` | `Cart_Item` | Línea de carrito |
+| `order.go` | `Order` | `Orders` | Pedidos |
+| `order_status.go` | enum `OrderStatus` | — | `pendiente\|pagado\|enviado\|entregado\|cancelado` |
+| `order_item.go` | `OrderItem` | `Order_item` | Línea de pedido con snapshot de precio |
+| `payment.go` | `Payment` | `Payment` | Pagos por orden |
+| `payment_method.go` | enum `PaymentMethod` | — | `efectivo\|tarjeta\|transferencia\|webpay` |
+| `payment_status.go` | enum `PaymentStatus` | — | `pendiente\|aprobado\|rechazado\|reembolsado` |
+| `shipping_address.go` | `ShippingAddress` | `shipping_address` | Direcciones por usuario |
+| `stock_movement.go` | `StockMovement` | `Stock_movement` | Auditoría de stock |
+| `stock_movement_reason.go` | enum `StockMovementReason` | — | `venta\|devolucion\|ajuste\|reposicion\|danado` |
+| `review.go` | `Review` | `Review` | Reseñas con moderación |
+| `review_rating.go` | helpers rating | — | `IsValidRating(int) bool` (1–5) |
+
+### Capa admin (backend)
+
+| Archivo | Struct | Tabla | Notas |
+|---|---|---|---|
+| `admin.go` | `Admin` | `Admins` | Login admin |
+| `permission.go` | `Permission` | `Permission` | Permisos granulares |
+| `admin_permission.go` | `AdminPermission` | `Admin_Permission` | Join table |
+
+### Capa personal/herramientas (no público)
+
+| Archivo | Struct | Tabla | Notas |
+|---|---|---|---|
+| `impresora3d.go` | `Impresora3d` | `impresora3d` | Impresoras del dueño |
+| `filament.go` | `Filament` | `Filament` | Inventario filamentos |
+| `item3d.go` | `Item3D` | `Items3D` | Configs de impresión |
+
+## DTOs planificados (no implementados aún)
+
+### Auth (primer set, acordado el 2026-06-30)
+
+```
+internal/dto/
+├── auth_user.go         # UserRegisterRequest, UserLoginRequest, UserLoginResponse, UserResponse
+└── auth_admin.go        # AdminLoginRequest, AdminLoginResponse, AdminResponse
+```
+
+Separados en archivos distintos porque `User` y `Admin` viven en dominios distintos (auth público vs auth admin con middleware separado), aunque el request de login comparta forma. Mantenerlos separados evita cruces accidentales.
+
 ## Estado del proyecto (2026-06-30)
 
-**Capa `config/` + `database/postgres.go` completadas y validadas** (smoke test live OK con `deployment-postgres-1`).
+**Capa `config/` + `database/postgres.go` + índices del DBML completadas y validadas** (smoke test live OK con `deployment-postgres-1`).
 
 - `go.mod` + `godotenv` + `gorm.io/gorm` + `gorm.io/driver/postgres` vía `go mod tidy`
 - `internal/config/config.go` con `Load()`, validación en boot (`JWT_SECRET ≥ 32 bytes`, `BCRYPT_COST ∈ [4,31]`)
 - `Backend/.env.example` (plantilla) + `Backend/.env` (real, gitignored) con DB host `dbtienda`
-- `internal/database/postgres.go` con `Connect(cfg)`: DSN seguro, GORM abierto, pool (25/5, 5min/10min), ping con timeout 5s. **Comentario de seguridad explícito** sobre queries parametrizadas vs `fmt.Sprintf(userInput)` — defesa contra SQL injection desde el día 1.
-- `cmd/server/main.go` cablea `config.Load()` → `database.Connect()` y muestra resumen + cierre limpio con `defer Close`.
+- `internal/database/postgres.go` con `Connect(cfg)`: DSN seguro, GORM abierto, pool (25/5, 5min/10min), ping con timeout 5s. **Comentario de seguridad explícito** sobre queries parametrizadas vs `fmt.Sprintf(userInput)` — defensa contra SQL injection desde el día 1.
+- `cmd/server/main.go` cablea `config.Load()` → `database.Connect()` y muestra resumen + cierre limpio con `defer Close` (vía `db.DB().Close()` — *gorm.DB* no expone Close directo).
+- **DBML actualizado con 7 índices nuevos** cubriendo FKs faltantes y sort patterns reales (ver sección "Pendientes" arriba).
 
 **Verificación live:** contenedor `deployment-postgres-1` arrancado en `localhost:5432`, conexión con override de env (`DB_USER=postgres DB_PASSWORD=lo DB_NAME=postgres`) retorna "✓ open, pool configured, ping ok". El host `dbtienda` (nombre de servicio docker) solo resuelve desde la red `deployment_template-network` — para el docker-compose venidero.
 
-**Sin commitear:** `cmd/server/main.go`, `internal/config/config.go`, `Backend/.env.example`, `internal/database/postgres.go`, `go.mod`, `go.sum`. Commit recomendado antes de seguir.
+**Sin commitear:** `cmd/server/main.go`, `internal/config/config.go`, `Backend/.env.example`, `internal/database/postgres.go`, `internal/database/database.sql` (con los 7 índices nuevos), `go.mod`, `go.sum`. Commit recomendado antes de seguir.
 
-**Próximo paso (sesión siguiente):** Models GORM que reflejen el esquema DBML (`Users`, `Category`, `Items`, etc.). **Crítico:** cada índice nuevo en el DBML debe tener su tag `gorm:"index:idx_xxx"` correspondiente en el struct, o AutoMigrate no los creará. Recién después: agregar `db.AutoMigrate(...)` en `Connect()` o en un `Migrate()` separado, y primer slice vertical (Auth).
+## Estado del proyecto (2026-07-01)
+
+**17 modelos GORM + AutoMigrate completados y validados live.**
+
+- `internal/models/` — los 17 archivos del plan, cada uno con `TableName()` y los tags `gorm:"index:...,uniqueIndex:...,not null,size:...,type:numeric(...)"` correspondientes. Money como `int64` + `numeric(12,2)` (CLP sin decimales). Nullable como punteros. `Item.BeforeCreate` para auto-slug sigue pendiente (en el plan).
+- `internal/database/migrate.go` — `Migrate(db)` lista los 17 structs en orden de dependencia (raíz → joins) y delega en `db.AutoMigrate(...)`. Documenta que **NO** aplica FKs `REFERENCES`, políticas `ON DELETE`, ni `CHECK` constraints del DBML — eso vive en el SQL que se genere desde `database.sql` (dbdiagram.io) y debe correrse por separado cuando se necesite el FK topológico completo.
+- `cmd/server/main.go` invoca `database.Migrate(db)` después de `Connect`. Imprime "✓ 17 models reconciled" en boot.
+
+**Validación live contra `deployment-postgres-1`**:
+- 17 tablas creadas con nombres exactos del DBML (`Users`, `Admins`, `Items`, `Items3D`, `Cart_Item`, `Admin_Permission`, `Order_item`, `Stock_movement`, `shipping_address`, `impresora3d`, etc.).
+- 27 índices verificados: únicos simples, compuestos (`uq_admin_permission`, `uq_cart_item`, `uq_order_item`, `uq_review_user_item`, `uq_payment_transaction`) y multi-columna (`idx_review_item_approved`, `idx_orders_status_date`, `idx_orders_user_date`).
+- Defaults y tipos numéricos respetados (`Items.status` → `'activo'`, `Payment.status` → `'pendiente'`, `impresora3d.error_margin` → `numeric(5,2) DEFAULT 10.00`).
+
+**Bug detectado y corregido**:
+- La `NamingStrategy` de GORM partía `Items3DID` / `Item3DID` en `items3_d_id` / `item3_d_id` (interpreta `3D` como transición camelCase). El DBML espera `items3d_id` / `item3d_id`. Sin esto, los `FOREIGN KEY ... REFERENCES "Items3D"` del SQL generado desde el DBML habrían fallado en el momento de aplicarlos.
+- **Fix**: tag explícito `gorm:"column:item3d_id"` en los 2 structs afectados (`item.go`, `item3d.go`). Tablas re-creadas, columnas verificadas.
+- **Lección**: cuando un identificador Go termina en `3D` (o cualquier `#<letra>` donde `#` es dígito), GORM añade `_` delante de la letra. Mejor tag explícito que renombrar el campo Go y romper el dominio.
+
+**Sin commitear:** los 17 archivos en `internal/models/`, `internal/database/migrate.go`, cambios en `cmd/server/main.go`, y los 2 tags nuevos en `item.go`/`item3d.go`. Commit recomendado antes de seguir con DTOs de auth.
+
+**Próximo paso (sesión siguiente):** DTOs de auth — `internal/dto/auth_user.go` (`UserRegisterRequest`, `UserLoginRequest`, `UserLoginResponse`, `UserResponse`) y `internal/dto/auth_admin.go` (`AdminLoginRequest`, `AdminLoginResponse`, `AdminResponse`). Después: slice vertical Auth (register/login/me + JWT middleware) o 7 archivos de enums/helpers primero. Decisión del usuario.
 
 ## Recordatorios importantes
 

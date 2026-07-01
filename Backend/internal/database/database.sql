@@ -1,12 +1,20 @@
 // Esquema DBML — dbdiagram.io
 // Para exportar a SQL: https://dbdiagram.io/d → "Export to PostgreSQL"
+//
+// ON DELETE policies:
+// - SET NULL on User FKs and other "histórico" refs (preserva orders, carts, addresses, reviews, stock movements si user se borra)
+// - CASCADE en dependencias de vida corta (admin_permissions, line items siguen al padre)
+// - RESTRICT en referencias que no deberían perderse (ej: item con historial de ventas)
+//
+// IMPORTANTE: User FKs con `delete: set null` deben ser nullable (no `not null`)
+// — Postgres rechaza SET NULL sobre columna NOT NULL.
 
 Table "public"."Orders" {
   "order_id" bigint [pk, not null, increment]
-  "user_id" bigint [ref: > "public"."Users"."user_id"]
+  "user_id" bigint [ref: > "public"."Users"."user_id", note: 'Nullable para SET NULL al borrar user', delete: set null]
   "total" numeric(12,2) [not null, note: 'Total final del pedido']
-  "status" varchar(50) [default: 'pendiente', note: 'pendiente|pagado|enviado|entregado|cancelado']
-  "shipping_address_id" bigint [not null, ref: - "public"."shipping_address"."shipping_address_id"]
+  "status" varchar(50) [not null, default: 'pendiente', note: 'pendiente|pagado|enviado|entregado|cancelado']
+  "shipping_address_id" bigint [not null, ref: - "public"."shipping_address"."shipping_address_id", delete: restrict]
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
   Indexes {
@@ -33,8 +41,8 @@ Table "public"."Users" {
 
 Table "public"."Admin_Permission" {
   "admin_permission_id" bigint [pk, not null, increment]
-  "admin_id" bigint [not null, ref: > "public"."Admins"."admin_id"]
-  "permission_id" bigint [not null, ref: > "public"."Permission"."permission_id"]
+  "admin_id" bigint [not null, ref: > "public"."Admins"."admin_id", delete: cascade]
+  "permission_id" bigint [not null, ref: > "public"."Permission"."permission_id", delete: cascade]
   "created_at" timestamptz [not null, default: `now()`]
   Indexes {
     (admin_id, permission_id) [unique, name: 'uq_admin_permission']
@@ -43,12 +51,15 @@ Table "public"."Admin_Permission" {
 
 Table "public"."Order_item" {
   "order_item_id" bigint [pk, not null, increment]
-  "order_id" bigint [not null, ref: > "public"."Orders"."order_id"]
-  "item_id" bigint [not null, ref: > "public"."Items"."item_id"]
-  "quantity" int [not null, note: 'CHECK > 0']
+  "order_id" bigint [not null, ref: > "public"."Orders"."order_id", delete: cascade]
+  "item_id" bigint [not null, ref: > "public"."Items"."item_id", delete: restrict]
+  "quantity" int [not null, note: 'Cantidad pedida; constraint chk_order_item_qty_positive']
   "unit_price" numeric(12,2) [not null, note: 'Precio al momento de comprar (snapshot)']
   "subtotal" numeric(12,2) [not null, note: '= unit_price * quantity']
   "created_at" timestamptz [not null, default: `now()`]
+
+  Check quantity > 0 [name: 'chk_order_item_qty_positive']
+
   Indexes {
     (order_id, item_id) [unique, name: 'uq_order_item']
     item_id [name: 'idx_order_item_item']
@@ -57,11 +68,14 @@ Table "public"."Order_item" {
 
 Table "public"."Cart_Item" {
   "cart_item_id" bigint [pk, not null, increment]
-  "cart_id" bigint [not null, ref: > "public"."Cart"."cart_id"]
-  "item_id" bigint [not null, ref: > "public"."Items"."item_id"]
-  "quantity" int [not null, default: 1, note: 'CHECK > 0; si agregas el mismo producto, sumar cantidad']
+  "cart_id" bigint [not null, ref: > "public"."Cart"."cart_id", delete: cascade]
+  "item_id" bigint [not null, ref: > "public"."Items"."item_id", delete: restrict]
+  "quantity" int [not null, default: 1, note: 'Si agregas el mismo producto, sumar cantidad; constraint chk_cart_item_qty_positive']
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
+
+  Check quantity > 0 [name: 'chk_cart_item_qty_positive']
+
   Indexes {
     (cart_id, item_id) [unique, name: 'uq_cart_item']
   }
@@ -86,11 +100,11 @@ Table "public"."Filament" {
 
 Table "public"."Payment" {
   "payment_id" bigint [pk, not null, increment]
-  "order_id" bigint [not null, ref: - "public"."Orders"."order_id"]
+  "order_id" bigint [not null, ref: - "public"."Orders"."order_id", delete: restrict]
   "method" varchar(50) [not null, note: 'efectivo|tarjeta|transferencia|webpay']
   "amount" numeric(12,2) [not null]
-  "status" varchar(50) [default: 'pendiente', note: 'pendiente|aprobado|rechazado|reembolsado']
-  "transaction_id" varchar(200) [unique, note: 'ID externo del gateway']
+  "status" varchar(50) [not null, default: 'pendiente', note: 'pendiente|aprobado|rechazado|reembolsado']
+  "transaction_id" varchar(200) [unique, not null, note: 'ID externo del gateway; NOT NULL para que UNIQUE aplique']
   "paid_at" timestamptz
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
@@ -104,10 +118,9 @@ Table "public"."Category" {
   "name" varchar(200) [not null]
   "slug" varchar(200) [unique, not null, note: 'URL-friendly; ej: electronica']
   "description" text
-  "image_url" varchar(500)
   "meta_title" varchar(200)
   "meta_description" text
-  "parent_id" bigint [ref: > "public"."Category"."category_id", note: 'Para subcategorías']
+  "parent_id" bigint [ref: > "public"."Category"."category_id", note: 'Para subcategorías; SET NULL permite que subcategoría sobreviva si se borra el padre', delete: set null]
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
   Indexes {
@@ -117,7 +130,7 @@ Table "public"."Category" {
 
 Table "public"."Cart" {
   "cart_id" bigint [pk, not null, increment]
-  "user_id" bigint [unique, ref: - "public"."Users"."user_id", note: 'Un carrito activo por usuario']
+  "user_id" bigint [unique, ref: - "public"."Users"."user_id", note: 'Un carrito activo por usuario; nullable porque ON DELETE SET NULL', delete: set null]
   "status" varchar(50) [not null, default: 'activo', note: 'activo|abandonado|completado']
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
@@ -134,11 +147,11 @@ Table "public"."Items" {
   "stock" int [not null, default: 0]
   "backorder" boolean [not null, default: false, note: '¿Se puede vender sin stock?']
   "status" varchar(50) [not null, default: 'activo', note: 'activo|inactivo|archivado']
-  "category_id" bigint [not null, ref: > "public"."Category"."category_id"]
+  "category_id" bigint [not null, ref: > "public"."Category"."category_id", delete: restrict]
   "brand" varchar(200)
   "color" varchar(100)
   "image_url" varchar(500)
-  "items3d_id" bigint [ref: > "public"."Items3D"."items3d_id", note: 'Config de impresión 3D asociada (opcional)']
+  "items3d_id" bigint [ref: > "public"."Items3D"."items3d_id", note: 'Config de impresión 3D asociada (opcional)', delete: set null]
   "meta_title" varchar(200)
   "meta_description" text
   "view_count" int [not null, default: 0]
@@ -157,9 +170,8 @@ Table "public"."Items" {
 Table "public"."Admins" {
   "admin_id" bigint [pk, not null, increment]
   "email" varchar(200) [unique, not null]
-  "nombre" varchar(200) [not null]
-  "phone" varchar(50)
-  "pass" varchar(255) [note: 'Hasheado; considera fusionar con Users+role']
+  "name" varchar(200) [not null]
+  "pass" varchar(255) [not null, note: 'Hasheado; considera fusionar con Users+role']
   "is_active" boolean [not null, default: true]
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
@@ -170,7 +182,7 @@ Table "public"."impresora3d" {
   "name" varchar(200) [note: 'Nombre identificador; ej: Prusa-01']
   "electricity_cost_per_hour" numeric(12,4)
   "cost_reparation" numeric(12,2)
-  "error_margin" numeric(5,2) [default: 10.00, note: '% de margen de error (antes: margén_error como bigint)']
+  "error_margin" numeric(5,2) [not null, default: 10.00, note: '% de margen de error (antes: margén_error como bigint)']
   "useful_life_hours" int [note: 'Vida útil en horas']
   "is_active" boolean [not null, default: true]
   "created_at" timestamptz [not null, default: `now()`]
@@ -180,13 +192,13 @@ Table "public"."impresora3d" {
 Table "public"."Items3D" {
   "items3d_id" bigint [pk, not null, increment]
   "name" varchar(200) [not null, note: 'Nombre de la configuración de impresión']
-  "impresora3d_id" bigint [ref: > "public"."impresora3d"."impresora3d_id"]
+  "impresora3d_id" bigint [ref: > "public"."impresora3d"."impresora3d_id", delete: restrict]
   "filament_grams" double precision [note: 'Gramos de filamento usados']
   "hours" int [not null, default: 0]
   "minutes" int [not null, default: 0]
   "extra_cost" numeric(12,2) [note: 'Costos extra (post-procesado, etc.)']
   "cost" numeric(12,2) [note: 'Costo total calculado']
-  "filament_id" bigint [ref: > "public"."Filament"."filament_id"]
+  "filament_id" bigint [ref: > "public"."Filament"."filament_id", delete: set null]
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
   Indexes {
@@ -196,7 +208,7 @@ Table "public"."Items3D" {
 
 Table "public"."shipping_address" {
   "shipping_address_id" bigint [pk, not null, increment]
-  "user_id" bigint [not null, ref: > "public"."Users"."user_id"]
+  "user_id" bigint [ref: > "public"."Users"."user_id", note: 'Nullable para SET NULL al borrar user', delete: set null]
   "address_line" varchar(500) [not null]
   "city" varchar(200) [not null]
   "postal_code" varchar(50) [not null]
@@ -204,6 +216,13 @@ Table "public"."shipping_address" {
   "is_default" boolean [not null, default: false]
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
+
+  Note: 'Para "una sola dirección default por user", después de exportar a SQL añadir manualmente:
+    CREATE UNIQUE INDEX uq_shipping_user_default
+      ON shipping_address (user_id)
+      WHERE is_default;
+  DBML no soporta partial indexes nativamente.'
+
   Indexes {
     user_id [name: 'idx_shipping_user']
   }
@@ -211,11 +230,11 @@ Table "public"."shipping_address" {
 
 Table "public"."Stock_movement" {
   "movement_id" bigint [pk, not null, increment]
-  "item_id" bigint [not null, ref: > "public"."Items"."item_id"]
+  "item_id" bigint [not null, ref: > "public"."Items"."item_id", delete: restrict]
   "change" int [not null, note: 'Positivo=entrada, negativo=salida; ej: +10, -5']
   "reason" varchar(50) [not null, note: 'venta|devolucion|ajuste|reposicion|danado']
-  "order_id" bigint [ref: > "public"."Orders"."order_id", note: 'NULL si no связа a venta (reposición, ajuste)']
-  "user_id" bigint [ref: > "public"."Users"."user_id", note: 'Quién hizo el movimiento']
+  "order_id" bigint [ref: > "public"."Orders"."order_id", note: 'NULL si no vincula a venta (reposición, ajuste)', delete: set null]
+  "user_id" bigint [ref: > "public"."Users"."user_id", note: 'Quién hizo el movimiento', delete: set null]
   "created_at" timestamptz [not null, default: `now()`]
   Indexes {
     item_id [name: 'idx_stock_movement_item']
@@ -226,12 +245,15 @@ Table "public"."Stock_movement" {
 
 Table "public"."Review" {
   "review_id" bigint [pk, not null, increment]
-  "user_id" bigint [not null, ref: > "public"."Users"."user_id"]
-  "item_id" bigint [not null, ref: > "public"."Items"."item_id"]
-  "rating" int [not null, note: '1-5 estrellas']
+  "user_id" bigint [ref: > "public"."Users"."user_id", note: 'Nullable para SET NULL al borrar user', delete: set null]
+  "item_id" bigint [not null, ref: > "public"."Items"."item_id", delete: restrict]
+  "rating" int [not null, note: '1-5 estrellas; constraint chk_review_rating_range']
   "comment" text
   "approved" boolean [not null, default: false, note: 'Pasa por moderación']
   "created_at" timestamptz [not null, default: `now()`]
+
+  Check rating BETWEEN 1 AND 5 [name: 'chk_review_rating_range']
+
   Indexes {
     item_id [name: 'idx_review_item']
     (item_id, approved) [name: 'idx_review_item_approved']
