@@ -127,10 +127,11 @@ Health: `GET /health`.
 
 ## Pendientes conocidos (v1)
 
-- [ ] Inicializar `go.mod` y descargar deps
-- [ ] `config/` + `.env.example` + carga de env
-- [ ] `database/postgres.go` + conexión + AutoMigrate
-- [ ] Models GORM que reflejen el esquema
+- [x] Inicializar `go.mod` y descargar deps
+- [x] `config/` + `.env.example` + carga de env
+- [x] `database/postgres.go` — conexión GORM + pool + ping (sin AutoMigrate aún)
+- [x] **DBML: añadir índices faltantes para query patterns reales** (Orders.shipping_address_id, Payment.order_id, Order_item.item_id, Review UNIQUE, Items.created_at, Stock_movement.order_id, Orders(status, created_at))
+- [ ] Models GORM que reflejen el esquema — **deben incluir los tags `gorm:"index:idx_xxx"` para que AutoMigrate replique los índices del DBML**
 - [ ] Slice vertical **Auth** completo (register/login/me + JWT middleware)
 - [ ] Lectura pública de productos y categorías (con paginación + filtro + búsqueda)
 - [ ] Scaffolds (stubs 501) para admin CRUD, cart, orders
@@ -140,6 +141,22 @@ Health: `GET /health`.
 - [ ] `Dockerfile` multi-stage + docker-compose con postgres
 - [ ] Seeder opcional (admin user + categorías de ejemplo)
 - [ ] Decidir si fusionar `Admins` con `Users + role`
+
+## Estado del proyecto (2026-06-30)
+
+**Capa `config/` + `database/postgres.go` completadas y validadas** (smoke test live OK con `deployment-postgres-1`).
+
+- `go.mod` + `godotenv` + `gorm.io/gorm` + `gorm.io/driver/postgres` vía `go mod tidy`
+- `internal/config/config.go` con `Load()`, validación en boot (`JWT_SECRET ≥ 32 bytes`, `BCRYPT_COST ∈ [4,31]`)
+- `Backend/.env.example` (plantilla) + `Backend/.env` (real, gitignored) con DB host `dbtienda`
+- `internal/database/postgres.go` con `Connect(cfg)`: DSN seguro, GORM abierto, pool (25/5, 5min/10min), ping con timeout 5s. **Comentario de seguridad explícito** sobre queries parametrizadas vs `fmt.Sprintf(userInput)` — defesa contra SQL injection desde el día 1.
+- `cmd/server/main.go` cablea `config.Load()` → `database.Connect()` y muestra resumen + cierre limpio con `defer Close`.
+
+**Verificación live:** contenedor `deployment-postgres-1` arrancado en `localhost:5432`, conexión con override de env (`DB_USER=postgres DB_PASSWORD=lo DB_NAME=postgres`) retorna "✓ open, pool configured, ping ok". El host `dbtienda` (nombre de servicio docker) solo resuelve desde la red `deployment_template-network` — para el docker-compose venidero.
+
+**Sin commitear:** `cmd/server/main.go`, `internal/config/config.go`, `Backend/.env.example`, `internal/database/postgres.go`, `go.mod`, `go.sum`. Commit recomendado antes de seguir.
+
+**Próximo paso (sesión siguiente):** Models GORM que reflejen el esquema DBML (`Users`, `Category`, `Items`, etc.). **Crítico:** cada índice nuevo en el DBML debe tener su tag `gorm:"index:idx_xxx"` correspondiente en el struct, o AutoMigrate no los creará. Recién después: agregar `db.AutoMigrate(...)` en `Connect()` o en un `Migrate()` separado, y primer slice vertical (Auth).
 
 ## Recordatorios importantes
 

@@ -13,6 +13,8 @@ Table "public"."Orders" {
     user_id [name: 'idx_orders_user']
     (user_id, created_at) [name: 'idx_orders_user_date']
     status [name: 'idx_orders_status']
+    shipping_address_id [name: 'idx_orders_shipping']
+    (status, created_at) [name: 'idx_orders_status_date']
   }
 }
 
@@ -49,6 +51,7 @@ Table "public"."Order_item" {
   "created_at" timestamptz [not null, default: `now()`]
   Indexes {
     (order_id, item_id) [unique, name: 'uq_order_item']
+    item_id [name: 'idx_order_item_item']
   }
 }
 
@@ -91,6 +94,9 @@ Table "public"."Payment" {
   "paid_at" timestamptz
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
+  Indexes {
+    order_id [name: 'idx_payment_order']
+  }
 }
 
 Table "public"."Category" {
@@ -144,6 +150,7 @@ Table "public"."Items" {
     status [name: 'idx_items_status']
     (status, category_id) [name: 'idx_items_status_category']
     is_featured [name: 'idx_items_featured']
+    created_at [name: 'idx_items_created']
   }
 }
 
@@ -213,6 +220,7 @@ Table "public"."Stock_movement" {
   Indexes {
     item_id [name: 'idx_stock_movement_item']
     created_at [name: 'idx_stock_movement_date']
+    order_id [name: 'idx_stock_movement_order']
   }
 }
 
@@ -227,5 +235,6 @@ Table "public"."Review" {
   Indexes {
     item_id [name: 'idx_review_item']
     (item_id, approved) [name: 'idx_review_item_approved']
+    (user_id, item_id) [unique, name: 'uq_review_user_item']
   }
 }
