@@ -58,6 +58,9 @@ func Migrate(db *gorm.DB) error {
 		&models.StockMovement{},
 		&models.Review{},
 
+		// Privacy consent (depends on User).
+		&models.PrivacyConsent{},
+
 		// Admin permission join.
 		&models.AdminPermission{},
 	}

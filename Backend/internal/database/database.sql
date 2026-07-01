@@ -31,11 +31,13 @@ Table "public"."Users" {
   "email" varchar(255) [unique, not null, note: 'Único por persona']
   "pass" varchar(255) [not null, note: 'Hasheado con bcrypt']
   "name" varchar(200) [not null]
-  "phone" varchar(50) [note: 'Opcional; útil para envíos']
+  "phone" varchar(20) [not null, note: 'Obligatorio; formato libre (típicamente +569XXXXXXXX)']
+  "rut" varchar(12) [unique, not null, note: 'RUT chileno con guión y DV; ej: 12345678-9 o 12345678-K. Único por persona. Validación de DV en service.']
   "created_at" timestamptz [not null, default: `now()`]
   "updated_at" timestamptz [not null, default: `now()`]
   Indexes {
     email [name: 'idx_users_email']
+    rut [unique, name: 'idx_users_rut']
   }
 }
 
@@ -258,5 +260,17 @@ Table "public"."Review" {
     item_id [name: 'idx_review_item']
     (item_id, approved) [name: 'idx_review_item_approved']
     (user_id, item_id) [unique, name: 'uq_review_user_item']
+  }
+}
+
+Table "public"."Privacy_Consent" {
+  "consent_id" bigint [pk, not null, increment]
+  "user_id" bigint [not null, ref: > "public"."Users"."user_id", delete: cascade, note: 'FK a Users; CASCADE porque consents son evidencia que sigue a la cuenta. Anonimizar user_id (SET NULL) solo vía operación admin si el user pide borrar cuenta y hay litigio pendiente.']
+  "document_version" varchar(50) [not null, note: 'Versión del doc que el usuario aceptó; ej: v1.2']
+  "accepted_at" timestamptz [not null, default: `now()`]
+  "ip_address" varchar(45) [not null, note: 'IPv4/IPv6 del request; máx 45 chars para IPv6 completo']
+  Indexes {
+    user_id [name: 'idx_privacy_consent_user']
+    (user_id, document_version) [name: 'idx_privacy_consent_user_version']
   }
 }
